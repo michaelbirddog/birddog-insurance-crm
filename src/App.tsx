@@ -1,12 +1,63 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery } from 'convex/react';
-import { api } from '../convex/_generated/api';
-import type { Doc, Id } from '../convex/_generated/dataModel';
+import { supabase } from './supabaseClient';
 
-type Partner = Doc<'partners'>;
-type Contact = Doc<'contacts'>;
-type Activity = Doc<'activity'>;
-type DocumentWithUrl = Doc<'documents'> & { url: string | null };
+type Partner = {
+  id: string;
+  name: string;
+  type: string;
+  stage: string;
+  website: string;
+  appetite: string;
+  productsToWrite: string[];
+  claimProcess: string;
+  ratingProcess: string;
+  economics: string;
+  notes: string;
+  createdAt: number;
+  updatedAt: number;
+};
+type PartnerRow = {
+  id: string;
+  name: string;
+  type: string;
+  stage: string;
+  website: string | null;
+  appetite: string | null;
+  products_to_write: string[] | null;
+  claim_process: string | null;
+  rating_process: string | null;
+  economics: string | null;
+  notes: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+type Contact = {
+  id: string;
+  partner_id: string;
+  name: string;
+  title: string | null;
+  email: string | null;
+  phone: string | null;
+  role: string | null;
+};
+type Activity = {
+  id: string;
+  partner_id: string;
+  date: string | number;
+  type: string;
+  note: string;
+};
+type DocumentWithUrl = {
+  id: string;
+  partner_id: string;
+  storage_path: string;
+  file_name: string;
+  file_type: string | null;
+  category: string | null;
+  created_at?: string | null;
+  uploaded_at?: string | null;
+  url: string | null;
+};
 type View = 'kanban' | 'table';
 type PartnerForm = {
   name: string;
@@ -21,7 +72,7 @@ type PartnerForm = {
   notes: string;
 };
 type ContactDraft = {
-  _id?: Id<'contacts'>;
+  id?: string;
   name: string;
   title: string;
   email: string;
@@ -70,18 +121,67 @@ function partnerToForm(partner?: Partner | null): PartnerForm {
   };
 }
 
-const cleanOptional = (value: string) => value.trim() || undefined;
+const cleanOptional = (value: string) => value.trim() || null;
 const truncate = (value: string, length: number) => value.length > length ? `${value.slice(0, length)}...` : value;
-const formatDate = (date: number) => new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-const formatShortDate = (date: number) => new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+const formatDate = (date: number | string) => new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const formatShortDate = (date: number | string) => new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+const dateValue = (value?: string | number | null) => value ? new Date(value).getTime() : Date.now();
+
+function mapPartner(row: PartnerRow): Partner {
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    stage: row.stage,
+    website: row.website ?? '',
+    appetite: row.appetite ?? '',
+    productsToWrite: row.products_to_write ?? [],
+    claimProcess: row.claim_process ?? '',
+    ratingProcess: row.rating_process ?? '',
+    economics: row.economics ?? '',
+    notes: row.notes ?? '',
+    createdAt: dateValue(row.created_at),
+    updatedAt: dateValue(row.updated_at ?? row.created_at),
+  };
+}
+
+function toPartnerPayload(form: PartnerForm) {
+  return {
+    name: form.name.trim(),
+    type: form.type,
+    stage: form.stage,
+    website: cleanOptional(form.website),
+    appetite: cleanOptional(form.appetite),
+    products_to_write: form.productsToWrite,
+    claim_process: cleanOptional(form.claimProcess),
+    rating_process: cleanOptional(form.ratingProcess),
+    economics: cleanOptional(form.economics),
+    notes: cleanOptional(form.notes),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function throwIfError(error: unknown) {
+  if (error) throw error;
+}
+
+async function createStageActivity(partnerId: string, oldStage: string, newStage: string) {
+  if (oldStage === newStage) return;
+  const { error } = await supabase.from('activity').insert({
+    partner_id: partnerId,
+    date: new Date().toISOString(),
+    type: 'Stage Change',
+    note: `${oldStage} -> ${newStage}`,
+  });
+  throwIfError(error);
+}
 
 export default function App() {
-  const partners = useQuery(api.partners.list) ?? [];
-  const seedPartners = useMutation(api.seed.seedPartners);
-  const updateStage = useMutation(api.partners.updateStage);
+  const [partners, setPartners] = useState<Partner[]>([]);
+  const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>('kanban');
   const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState<Id<'partners'> | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [toast, setToast] = useState('');
   const [dragStage, setDragStage] = useState<string | null>(null);
@@ -90,6 +190,24 @@ export default function App() {
     setToast(message);
     window.setTimeout(() => setToast(''), 2200);
   };
+
+  const loadPartners = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.from('partners').select('*').order('created_at', { ascending: true });
+      throwIfError(error);
+      setPartners(((data ?? []) as PartnerRow[]).map(mapPartner));
+    } catch (error) {
+      console.error(error);
+      showToast('Could not load partners');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadPartners();
+  }, []);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -117,13 +235,23 @@ export default function App() {
   }, [filtered]);
 
   const handleSeed = async () => {
-    const result = await seedPartners();
-    showToast(result.seeded ? `Seeded ${result.count} partners` : 'Seed skipped');
+    await loadPartners();
+    showToast('Synced from Supabase');
   };
 
-  const handleStageDrop = async (partnerId: Id<'partners'>, stage: string) => {
-    await updateStage({ id: partnerId, stage });
-    showToast(`Moved to ${stage}`);
+  const handleStageDrop = async (partnerId: string, stage: string) => {
+    const partner = partners.find((item) => item.id === partnerId);
+    if (!partner || partner.stage === stage) return;
+    try {
+      const { error } = await supabase.from('partners').update({ stage, updated_at: new Date().toISOString() }).eq('id', partnerId);
+      throwIfError(error);
+      await createStageActivity(partnerId, partner.stage, stage);
+      await loadPartners();
+      showToast(`Moved to ${stage}`);
+    } catch (error) {
+      console.error(error);
+      showToast('Move failed');
+    }
   };
 
   const exportJson = () => {
@@ -154,11 +282,11 @@ export default function App() {
       </div>
 
       <div className="storage-notice">
-        <div className="storage-notice-text"><strong style={{ color: 'var(--orange)' }}>SAVED TO CONVEX</strong> · Partner profiles, contacts, activity, and documents persist in the shared BirdDog database.</div>
+        <div className="storage-notice-text"><strong style={{ color: 'var(--orange)' }}>SAVED TO SUPABASE</strong> · Partner profiles, contacts, activity, and documents persist in the shared BirdDog database.</div>
       </div>
 
       <div className="stats">
-        <Stat label="Total Partners" value={partners.length} />
+        <Stat label="Total Partners" value={loading ? '...' : partners.length} />
         <Stat label="To Contact" value={counts['To Contact']} />
         <Stat label="In Progress" value={counts['In Progress']} className="accent" />
         <Stat label="Won" value={counts.Won} className="won" />
@@ -178,13 +306,13 @@ export default function App() {
       {view === 'kanban' ? (
         <div className="kanban">
           {STAGES.map((stage) => (
-            <div key={stage} className={`kanban-col ${dragStage === stage ? 'drop' : ''}`} onDragOver={(e) => { e.preventDefault(); setDragStage(stage); }} onDragLeave={() => setDragStage(null)} onDrop={(e) => { e.preventDefault(); setDragStage(null); const id = e.dataTransfer.getData('partnerId') as Id<'partners'>; if (id) void handleStageDrop(id, stage); }}>
+            <div key={stage} className={`kanban-col ${dragStage === stage ? 'drop' : ''}`} onDragOver={(e) => { e.preventDefault(); setDragStage(stage); }} onDragLeave={() => setDragStage(null)} onDrop={(e) => { e.preventDefault(); setDragStage(null); const id = e.dataTransfer.getData('partnerId'); if (id) void handleStageDrop(id, stage); }}>
               <div className="kanban-col-header">
                 <div className="kanban-col-title"><span className={`kanban-col-dot ${stageDot[stage]}`} />{stage}</div>
                 <div className="kanban-col-count">{byStage[stage].length}</div>
               </div>
               <div className="kanban-cards">
-                {byStage[stage].map((partner) => <PartnerCard key={partner._id} partner={partner} onOpen={() => setSelectedId(partner._id)} />)}
+                {byStage[stage].map((partner) => <PartnerCard key={partner.id} partner={partner} onOpen={() => setSelectedId(partner.id)} />)}
               </div>
             </div>
           ))}
@@ -193,8 +321,8 @@ export default function App() {
         <TableView partners={filtered} onOpen={setSelectedId} />
       )}
 
-      {selectedId && <PartnerModal partnerId={selectedId} onClose={() => setSelectedId(null)} showToast={showToast} />}
-      {creating && <PartnerModal onClose={() => setCreating(false)} showToast={showToast} />}
+      {selectedId && <PartnerModal partnerId={selectedId} onClose={() => setSelectedId(null)} onSaved={loadPartners} showToast={showToast} />}
+      {creating && <PartnerModal onClose={() => setCreating(false)} onSaved={loadPartners} showToast={showToast} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -206,7 +334,7 @@ function Stat({ label, value, className = '' }: { label: string; value: string |
 
 function PartnerCard({ partner, onOpen }: { partner: Partner; onOpen: () => void }) {
   return (
-    <div className="card" draggable onDragStart={(e) => { e.dataTransfer.setData('partnerId', partner._id); }} onClick={onOpen}>
+    <div className="card" draggable onDragStart={(e) => { e.dataTransfer.setData('partnerId', partner.id); }} onClick={onOpen}>
       <div className="card-name">{partner.name}</div>
       <div className="card-type">{partner.type}</div>
       <div className="card-meta"><span className={`pill ${typePill[partner.type] ?? 'pill-program'}`}>{partner.type}</span>{partner.productsToWrite.slice(0, 2).map((tag) => <span key={tag} className="pill pill-program">{tag}</span>)}</div>
@@ -215,14 +343,14 @@ function PartnerCard({ partner, onOpen }: { partner: Partner; onOpen: () => void
   );
 }
 
-function TableView({ partners, onOpen }: { partners: Partner[]; onOpen: (id: Id<'partners'>) => void }) {
+function TableView({ partners, onOpen }: { partners: Partner[]; onOpen: (id: string) => void }) {
   return (
     <div className="table-wrap">
       <table>
         <thead><tr><th>Partner</th><th>Type</th><th>Stage</th><th>Website</th><th>Appetite</th></tr></thead>
         <tbody>
           {partners.length ? partners.map((partner) => (
-            <tr className="row" key={partner._id} onClick={() => onOpen(partner._id)}>
+            <tr className="row" key={partner.id} onClick={() => onOpen(partner.id)}>
               <td className="td-name">{partner.name}</td>
               <td>{partner.type}</td>
               <td className={`td-stage ${stageClass[partner.stage]}`}>● {partner.stage}</td>
@@ -236,22 +364,11 @@ function TableView({ partners, onOpen }: { partners: Partner[]; onOpen: (id: Id<
   );
 }
 
-function PartnerModal({ partnerId, onClose, showToast }: { partnerId?: Id<'partners'>; onClose: () => void; showToast: (message: string) => void }) {
-  const partner = useQuery(api.partners.get, partnerId ? { id: partnerId } : 'skip');
-  const contacts = useQuery(api.contacts.listByPartner, partnerId ? { partnerId } : 'skip') ?? [];
-  const documents = useQuery(api.documents.listByPartner, partnerId ? { partnerId } : 'skip') ?? [];
-  const activity = useQuery(api.activity.listByPartner, partnerId ? { partnerId } : 'skip') ?? [];
-  const createPartner = useMutation(api.partners.create);
-  const updatePartner = useMutation(api.partners.update);
-  const deletePartner = useMutation(api.partners.remove);
-  const createContact = useMutation(api.contacts.create);
-  const updateContact = useMutation(api.contacts.update);
-  const deleteContact = useMutation(api.contacts.remove);
-  const createActivity = useMutation(api.activity.create);
-  const deleteActivity = useMutation(api.activity.remove);
-  const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
-  const saveDocument = useMutation(api.documents.saveDocument);
-  const deleteDocument = useMutation(api.documents.remove);
+function PartnerModal({ partnerId, onClose, onSaved, showToast }: { partnerId?: string; onClose: () => void; onSaved: () => Promise<void>; showToast: (message: string) => void }) {
+  const [partner, setPartner] = useState<Partner | null>(null);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [documents, setDocuments] = useState<DocumentWithUrl[]>([]);
+  const [activity, setActivity] = useState<Activity[]>([]);
   const [form, setForm] = useState<PartnerForm>(partnerToForm(null));
   const [contactsDraft, setContactsDraft] = useState<ContactDraft[]>([]);
   const [tagInput, setTagInput] = useState('');
@@ -260,12 +377,38 @@ function PartnerModal({ partnerId, onClose, showToast }: { partnerId?: Id<'partn
   const [docCategory, setDocCategory] = useState('Application');
   const [uploading, setUploading] = useState(false);
 
+  const loadDetails = async () => {
+    if (!partnerId) return;
+    const [{ data: partnerData, error: partnerError }, { data: contactsData, error: contactsError }, { data: docsData, error: docsError }, { data: activityData, error: activityError }] = await Promise.all([
+      supabase.from('partners').select('*').eq('id', partnerId).single(),
+      supabase.from('contacts').select('*').eq('partner_id', partnerId).order('name', { ascending: true }),
+      supabase.from('documents').select('*').eq('partner_id', partnerId).order('uploaded_at', { ascending: false }),
+      supabase.from('activity').select('*').eq('partner_id', partnerId).order('date', { ascending: false }),
+    ]);
+    throwIfError(partnerError);
+    throwIfError(contactsError);
+    throwIfError(docsError);
+    throwIfError(activityError);
+    const mappedPartner = mapPartner(partnerData as PartnerRow);
+    const mappedDocs = ((docsData ?? []) as Omit<DocumentWithUrl, 'url'>[]).map((doc) => ({
+      ...doc,
+      url: supabase.storage.from('partner-docs').getPublicUrl(doc.storage_path).data.publicUrl,
+    }));
+    setPartner(mappedPartner);
+    setForm(partnerToForm(mappedPartner));
+    setContacts((contactsData ?? []) as Contact[]);
+    setContactsDraft(((contactsData ?? []) as Contact[]).map(contactToDraft));
+    setDocuments(mappedDocs);
+    setActivity((activityData ?? []) as Activity[]);
+  };
+
   useEffect(() => {
-    if (partner) setForm(partnerToForm(partner));
-  }, [partner]);
-  useEffect(() => {
-    setContactsDraft(contacts.map(contactToDraft));
-  }, [contacts]);
+    if (!partnerId) return;
+    loadDetails().catch((error) => {
+      console.error(error);
+      showToast('Could not load profile');
+    });
+  }, [partnerId]);
 
   const setField = (field: keyof PartnerForm, value: string | string[]) => setForm((prev) => ({ ...prev, [field]: value }));
   const isNew = !partnerId;
@@ -277,67 +420,102 @@ function PartnerModal({ partnerId, onClose, showToast }: { partnerId?: Id<'partn
     setTagInput('');
   };
 
-  const saveContacts = async (pid: Id<'partners'>) => {
+  const saveContacts = async (pid: string) => {
     for (const row of contactsDraft) {
       if (!row.name.trim()) continue;
-      const payload = { name: row.name.trim(), title: cleanOptional(row.title), email: cleanOptional(row.email), phone: cleanOptional(row.phone), role: cleanOptional(row.role) };
-      if (row._id) await updateContact({ id: row._id, ...payload });
-      else await createContact({ partnerId: pid, ...payload });
+      const payload = { partner_id: pid, name: row.name.trim(), title: cleanOptional(row.title), email: cleanOptional(row.email), phone: cleanOptional(row.phone), role: cleanOptional(row.role) };
+      if (row.id) {
+        const { error } = await supabase.from('contacts').update(payload).eq('id', row.id);
+        throwIfError(error);
+      } else {
+        const { error } = await supabase.from('contacts').insert(payload);
+        throwIfError(error);
+      }
     }
   };
 
   const handleSave = async () => {
     if (!form.name.trim()) { showToast('Name is required'); return; }
-    const payload = {
-      name: form.name.trim(),
-      type: form.type,
-      stage: form.stage,
-      website: cleanOptional(form.website),
-      appetite: cleanOptional(form.appetite),
-      productsToWrite: form.productsToWrite,
-      claimProcess: cleanOptional(form.claimProcess),
-      ratingProcess: cleanOptional(form.ratingProcess),
-      economics: cleanOptional(form.economics),
-      notes: cleanOptional(form.notes),
-    };
-    if (partnerId) {
-      await updatePartner({ id: partnerId, ...payload });
-      await saveContacts(partnerId);
-      showToast('Saved');
-    } else {
-      const newId = await createPartner(payload);
-      await saveContacts(newId);
-      showToast('Partner created');
+    try {
+      const payload = toPartnerPayload(form);
+      if (partnerId) {
+        const oldStage = partner?.stage ?? form.stage;
+        const { error } = await supabase.from('partners').update(payload).eq('id', partnerId);
+        throwIfError(error);
+        await createStageActivity(partnerId, oldStage, form.stage);
+        await saveContacts(partnerId);
+        showToast('Saved');
+      } else {
+        const { data, error } = await supabase.from('partners').insert(payload).select('id').single();
+        throwIfError(error);
+        const newId = (data as { id: string }).id;
+        await saveContacts(newId);
+        showToast('Partner created');
+      }
+      await onSaved();
+      onClose();
+    } catch (error) {
+      console.error(error);
+      showToast('Save failed');
     }
-    onClose();
   };
 
   const handleDeletePartner = async () => {
     if (!partnerId || !window.confirm(`Delete ${form.name}? This cannot be undone.`)) return;
-    await deletePartner({ id: partnerId });
-    showToast('Deleted');
-    onClose();
+    try {
+      const { data: docs } = await supabase.from('documents').select('storage_path').eq('partner_id', partnerId);
+      const paths = ((docs ?? []) as { storage_path: string }[]).map((doc) => doc.storage_path).filter(Boolean);
+      if (paths.length) await supabase.storage.from('partner-docs').remove(paths);
+      for (const table of ['contacts', 'documents', 'activity']) {
+        const { error } = await supabase.from(table).delete().eq('partner_id', partnerId);
+        throwIfError(error);
+      }
+      const { error } = await supabase.from('partners').delete().eq('id', partnerId);
+      throwIfError(error);
+      await onSaved();
+      showToast('Deleted');
+      onClose();
+    } catch (error) {
+      console.error(error);
+      showToast('Delete failed');
+    }
   };
 
   const handleAddActivity = async (event?: FormEvent) => {
     event?.preventDefault();
     if (!partnerId || !activityNote.trim()) return;
-    await createActivity({ partnerId, type: activityType, note: activityNote.trim() });
+    const { error } = await supabase.from('activity').insert({ partner_id: partnerId, type: activityType, note: activityNote.trim(), date: new Date().toISOString() });
+    if (error) { console.error(error); showToast('Activity failed'); return; }
     setActivityNote('');
+    await loadDetails();
   };
 
   const uploadFile = async (file: File) => {
     if (!partnerId) { showToast('Save partner before uploading files'); return; }
     setUploading(true);
     try {
-      const postUrl = await generateUploadUrl();
-      const result = await fetch(postUrl, { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
-      const json = await result.json() as { storageId: Id<'_storage'> };
-      await saveDocument({ partnerId, storageId: json.storageId, fileName: file.name, fileType: cleanOptional(file.type), category: docCategory });
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const storagePath = `${partnerId}/${Date.now()}-${safeName}`;
+      const { error: uploadError } = await supabase.storage.from('partner-docs').upload(storagePath, file, { contentType: file.type || undefined });
+      throwIfError(uploadError);
+      const { error: insertError } = await supabase.from('documents').insert({ partner_id: partnerId, storage_path: storagePath, file_name: file.name, file_type: cleanOptional(file.type), category: docCategory, uploaded_at: new Date().toISOString() });
+      throwIfError(insertError);
+      await loadDetails();
       showToast('Document uploaded');
+    } catch (error) {
+      console.error(error);
+      showToast('Upload failed');
     } finally {
       setUploading(false);
     }
+  };
+
+  const removeDocument = async (doc: DocumentWithUrl) => {
+    const { error: storageError } = await supabase.storage.from('partner-docs').remove([doc.storage_path]);
+    if (storageError) console.error(storageError);
+    const { error } = await supabase.from('documents').delete().eq('id', doc.id);
+    if (error) { console.error(error); showToast('Delete failed'); return; }
+    setDocuments((prev) => prev.filter((item) => item.id !== doc.id));
   };
 
   return (
@@ -365,7 +543,7 @@ function PartnerModal({ partnerId, onClose, showToast }: { partnerId?: Id<'partn
 
           <div className="section-divider">Structured Contacts</div>
           <div className="contact-grid">
-            {contactsDraft.map((row, index) => <ContactRow key={row._id ?? index} row={row} setRow={(next) => setContactsDraft((prev) => prev.map((item, i) => i === index ? next : item))} onDelete={async () => { if (row._id) await deleteContact({ id: row._id }); setContactsDraft((prev) => prev.filter((_, i) => i !== index)); }} />)}
+            {contactsDraft.map((row, index) => <ContactRow key={row.id ?? index} row={row} setRow={(next) => setContactsDraft((prev) => prev.map((item, i) => i === index ? next : item))} onDelete={async () => { if (row.id) { const { error } = await supabase.from('contacts').delete().eq('id', row.id); if (error) { console.error(error); showToast('Contact delete failed'); return; } setContacts((prev) => prev.filter((item) => item.id !== row.id)); } setContactsDraft((prev) => prev.filter((_, i) => i !== index)); }} />)}
             <button className="btn" onClick={() => setContactsDraft((prev) => [...prev, { name: '', title: '', email: '', phone: '', role: '' }])}>+ Add Contact</button>
           </div>
 
@@ -379,11 +557,11 @@ function PartnerModal({ partnerId, onClose, showToast }: { partnerId?: Id<'partn
           <Field label="Notes" full><textarea value={form.notes} onChange={(e) => setField('notes', e.target.value)} placeholder="Context, gut reads, strategic considerations." /></Field>
 
           <div className="section-divider">Documents</div>
-          {partnerId ? <Documents documents={documents} docCategory={docCategory} setDocCategory={setDocCategory} uploadFile={uploadFile} deleteDocument={(id) => deleteDocument({ id })} uploading={uploading} /> : <div className="document-drop">Save this partner before uploading documents.</div>}
+          {partnerId ? <Documents documents={documents} docCategory={docCategory} setDocCategory={setDocCategory} uploadFile={uploadFile} deleteDocument={removeDocument} uploading={uploading} /> : <div className="document-drop">Save this partner before uploading documents.</div>}
 
           <div className="section-divider">Activity Log</div>
           <div className="activity-log">
-            {activity.length ? activity.slice().sort((a, b) => b.date - a.date).map((item) => <ActivityRow key={item._id} item={item} onDelete={() => deleteActivity({ id: item._id })} />) : <div className="activity-empty">No activity yet. Log your first touch below.</div>}
+            {activity.length ? activity.slice().sort((a, b) => dateValue(b.date) - dateValue(a.date)).map((item) => <ActivityRow key={item.id} item={item} onDelete={async () => { const { error } = await supabase.from('activity').delete().eq('id', item.id); if (error) { console.error(error); showToast('Activity delete failed'); return; } setActivity((prev) => prev.filter((entry) => entry.id !== item.id)); }} />) : <div className="activity-empty">No activity yet. Log your first touch below.</div>}
           </div>
           {partnerId && <form className="add-activity" onSubmit={handleAddActivity}><select value={activityType} onChange={(e) => setActivityType(e.target.value)}>{ACTIVITY_TYPES.map((type) => <option key={type}>{type}</option>)}</select><input value={activityNote} onChange={(e) => setActivityNote(e.target.value)} placeholder="What happened?" /><button className="btn primary">Log</button></form>}
         </div>
@@ -401,17 +579,17 @@ function Field({ label, full, children }: { label: string; full?: boolean; child
 }
 
 function contactToDraft(contact: Contact): ContactDraft {
-  return { _id: contact._id, name: contact.name, title: contact.title ?? '', email: contact.email ?? '', phone: contact.phone ?? '', role: contact.role ?? '' };
+  return { id: contact.id, name: contact.name, title: contact.title ?? '', email: contact.email ?? '', phone: contact.phone ?? '', role: contact.role ?? '' };
 }
 
 function ContactRow({ row, setRow, onDelete }: { row: ContactDraft; setRow: (row: ContactDraft) => void; onDelete: () => void }) {
   return <div className="contact-row"><input className="inline-input" value={row.name} onChange={(e) => setRow({ ...row, name: e.target.value })} placeholder="Name" /><input className="inline-input" value={row.title} onChange={(e) => setRow({ ...row, title: e.target.value })} placeholder="Title" /><input className="inline-input" value={row.email} onChange={(e) => setRow({ ...row, email: e.target.value })} placeholder="Email" /><input className="inline-input" value={row.phone} onChange={(e) => setRow({ ...row, phone: e.target.value })} placeholder="Phone" /><input className="inline-input" value={row.role} onChange={(e) => setRow({ ...row, role: e.target.value })} placeholder="Role" /><button className="btn danger" onClick={onDelete}>Delete</button></div>;
 }
 
-function Documents({ documents, docCategory, setDocCategory, uploadFile, deleteDocument, uploading }: { documents: DocumentWithUrl[]; docCategory: string; setDocCategory: (category: string) => void; uploadFile: (file: File) => void; deleteDocument: (id: Id<'documents'>) => void; uploading: boolean }) {
+function Documents({ documents, docCategory, setDocCategory, uploadFile, deleteDocument, uploading }: { documents: DocumentWithUrl[]; docCategory: string; setDocCategory: (category: string) => void; uploadFile: (file: File) => void; deleteDocument: (doc: DocumentWithUrl) => void; uploading: boolean }) {
   const [dragging, setDragging] = useState(false);
   const onFiles = (files: FileList | null) => { if (files?.[0]) void uploadFile(files[0]); };
-  return <><div className="field-grid"><Field label="Category"><select value={docCategory} onChange={(e) => setDocCategory(e.target.value)}>{DOC_CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select></Field><Field label="Upload"><label className="btn primary" style={{ textAlign: 'center' }}>{uploading ? 'Uploading...' : 'Choose File'}<input type="file" disabled={uploading} onChange={(e) => onFiles(e.target.files)} /></label></Field></div><div className="document-drop" style={{ borderColor: dragging ? 'var(--orange)' : undefined }} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); onFiles(e.dataTransfer.files); }}>Drag a file here or use Choose File.</div><div className="document-list">{documents.map((doc) => <div className="document-item" key={doc._id}><a href={doc.url ?? '#'} target="_blank" rel="noreferrer">{doc.fileName}</a><span className="pill pill-program">{doc.category ?? 'Other'}</span><span className="activity-date">{formatShortDate(doc.uploadedAt)}</span><button className="btn danger" onClick={() => deleteDocument(doc._id)}>Delete</button></div>)}</div></>;
+  return <><div className="field-grid"><Field label="Category"><select value={docCategory} onChange={(e) => setDocCategory(e.target.value)}>{DOC_CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select></Field><Field label="Upload"><label className="btn primary" style={{ textAlign: 'center' }}>{uploading ? 'Uploading...' : 'Choose File'}<input type="file" disabled={uploading} onChange={(e) => onFiles(e.target.files)} /></label></Field></div><div className="document-drop" style={{ borderColor: dragging ? 'var(--orange)' : undefined }} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); onFiles(e.dataTransfer.files); }}>Drag a file here or use Choose File.</div><div className="document-list">{documents.map((doc) => <div className="document-item" key={doc.id}><a href={doc.url ?? '#'} target="_blank" rel="noreferrer">{doc.file_name}</a><span className="pill pill-program">{doc.category ?? 'Other'}</span><span className="activity-date">{formatShortDate(doc.created_at ?? doc.uploaded_at ?? Date.now())}</span><button className="btn danger" onClick={() => deleteDocument(doc)}>Delete</button></div>)}</div></>;
 }
 
 function ActivityRow({ item, onDelete }: { item: Activity; onDelete: () => void }) {
