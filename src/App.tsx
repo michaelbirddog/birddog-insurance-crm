@@ -1,5 +1,12 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
+import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { supabase } from './supabaseClient';
+
+type CloseChecklistItem = {
+  id: string;
+  label: string;
+  checked: boolean;
+  order: number;
+};
 
 type Partner = {
   id: string;
@@ -13,6 +20,7 @@ type Partner = {
   ratingProcess: string;
   economics: string;
   notes: string;
+  closeChecklist: CloseChecklistItem[];
   createdAt: number;
   updatedAt: number;
 };
@@ -28,6 +36,7 @@ type PartnerRow = {
   rating_process: string | null;
   economics: string | null;
   notes: string | null;
+  close_checklist: unknown[] | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -39,13 +48,6 @@ type Contact = {
   email: string | null;
   phone: string | null;
   role: string | null;
-};
-type Activity = {
-  id: string;
-  partner_id: string;
-  date: string | number;
-  type: string;
-  note: string;
 };
 type DocumentWithUrl = {
   id: string;
@@ -70,6 +72,7 @@ type PartnerForm = {
   ratingProcess: string;
   economics: string;
   notes: string;
+  closeChecklist: CloseChecklistItem[];
 };
 type ContactDraft = {
   id?: string;
@@ -82,8 +85,18 @@ type ContactDraft = {
 
 const STAGES = ['To Contact', 'In Progress', 'Won', 'Lost'];
 const TYPES = ['Carrier', 'MGA', 'Wholesale Broker', 'Retail Broker', 'Program Administrator', 'Broker'];
-const ACTIVITY_TYPES = ['Email', 'Call', 'Meeting', 'Note', 'Submission', 'Quote', 'Stage Change'];
 const DOC_CATEGORIES = ['Application', 'Rate Sheet', 'Claims Form', 'Other'];
+const DEFAULT_CLOSE_CHECKLIST_LABELS = [
+  'Intro call held',
+  'NDA / confidentiality signed',
+  'Appetite guide received',
+  'Products / lines to write confirmed',
+  'Commission / economics agreed',
+  'Application + submission docs received',
+  'Sample risk submitted',
+  'Binding authority / LOA confirmed',
+  'Producer agreement executed',
+];
 
 const stageDot: Record<string, string> = {
   'To Contact': 'dot-to-contact',
@@ -118,6 +131,7 @@ function partnerToForm(partner?: Partner | null): PartnerForm {
     ratingProcess: partner?.ratingProcess ?? '',
     economics: partner?.economics ?? '',
     notes: partner?.notes ?? '',
+    closeChecklist: partner?.closeChecklist ?? makeDefaultCloseChecklist(),
   };
 }
 
@@ -126,6 +140,34 @@ const truncate = (value: string, length: number) => value.length > length ? `${v
 const formatDate = (date: number | string) => new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 const formatShortDate = (date: number | string) => new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const dateValue = (value?: string | number | null) => value ? new Date(value).getTime() : Date.now();
+const createId = () => typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+function makeDefaultCloseChecklist(): CloseChecklistItem[] {
+  return DEFAULT_CLOSE_CHECKLIST_LABELS.map((label, index) => ({ id: createId(), label, checked: false, order: index }));
+}
+
+function normalizeCloseChecklist(value: unknown): CloseChecklistItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const row = item as Partial<CloseChecklistItem>;
+      const label = typeof row.label === 'string' ? row.label.trim() : '';
+      if (!label) return null;
+      return {
+        id: typeof row.id === 'string' && row.id ? row.id : createId(),
+        label,
+        checked: Boolean(row.checked),
+        order: Number.isFinite(row.order) ? Number(row.order) : index,
+      };
+    })
+    .filter((item): item is CloseChecklistItem => Boolean(item))
+    .sort((a, b) => a.order - b.order);
+}
+
+function checklistStats(items: CloseChecklistItem[]) {
+  return { done: items.filter((item) => item.checked).length, total: items.length };
+}
 
 function mapPartner(row: PartnerRow): Partner {
   return {
@@ -140,6 +182,7 @@ function mapPartner(row: PartnerRow): Partner {
     ratingProcess: row.rating_process ?? '',
     economics: row.economics ?? '',
     notes: row.notes ?? '',
+    closeChecklist: normalizeCloseChecklist(row.close_checklist),
     createdAt: dateValue(row.created_at),
     updatedAt: dateValue(row.updated_at ?? row.created_at),
   };
@@ -157,6 +200,7 @@ function toPartnerPayload(form: PartnerForm) {
     rating_process: cleanOptional(form.ratingProcess),
     economics: cleanOptional(form.economics),
     notes: cleanOptional(form.notes),
+    close_checklist: normalizeCloseChecklist(form.closeChecklist),
     updated_at: new Date().toISOString(),
   };
 }
@@ -212,7 +256,7 @@ export default function App() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return partners;
-    return partners.filter((p) => [p.name, p.type, p.stage, p.website, p.appetite, p.economics, p.notes, ...(p.productsToWrite ?? [])]
+    return partners.filter((p) => [p.name, p.type, p.stage, p.website, p.appetite, p.economics, p.notes, ...(p.productsToWrite ?? []), ...p.closeChecklist.map((item) => item.label)]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
@@ -333,31 +377,41 @@ function Stat({ label, value, className = '' }: { label: string; value: string |
 }
 
 function PartnerCard({ partner, onOpen }: { partner: Partner; onOpen: () => void }) {
+  const progress = checklistStats(partner.closeChecklist);
   return (
     <div className="card" draggable onDragStart={(e) => { e.dataTransfer.setData('partnerId', partner.id); }} onClick={onOpen}>
       <div className="card-name">{partner.name}</div>
       <div className="card-type">{partner.type}</div>
       <div className="card-meta"><span className={`pill ${typePill[partner.type] ?? 'pill-program'}`}>{partner.type}</span>{partner.productsToWrite.slice(0, 2).map((tag) => <span key={tag} className="pill pill-program">{tag}</span>)}</div>
+      <ProgressBadge done={progress.done} total={progress.total} />
       <div className="card-last-touch">Updated {formatShortDate(partner.updatedAt)}</div>
     </div>
   );
+}
+
+function ProgressBadge({ done, total }: { done: number; total: number }) {
+  return <div className="progress-badge"><span>Path to Close</span><strong>{done} / {total} done</strong></div>;
 }
 
 function TableView({ partners, onOpen }: { partners: Partner[]; onOpen: (id: string) => void }) {
   return (
     <div className="table-wrap">
       <table>
-        <thead><tr><th>Partner</th><th>Type</th><th>Stage</th><th>Website</th><th>Appetite</th></tr></thead>
+        <thead><tr><th>Partner</th><th>Type</th><th>Stage</th><th>Path to Close</th><th>Website</th><th>Appetite</th></tr></thead>
         <tbody>
-          {partners.length ? partners.map((partner) => (
-            <tr className="row" key={partner.id} onClick={() => onOpen(partner.id)}>
-              <td className="td-name">{partner.name}</td>
-              <td>{partner.type}</td>
-              <td className={`td-stage ${stageClass[partner.stage]}`}>● {partner.stage}</td>
-              <td>{partner.website}</td>
-              <td>{truncate(partner.appetite ?? '', 90)}</td>
-            </tr>
-          )) : <tr><td colSpan={5} className="empty">No partners match your search.</td></tr>}
+          {partners.length ? partners.map((partner) => {
+            const progress = checklistStats(partner.closeChecklist);
+            return (
+              <tr className="row" key={partner.id} onClick={() => onOpen(partner.id)}>
+                <td className="td-name">{partner.name}</td>
+                <td>{partner.type}</td>
+                <td className={`td-stage ${stageClass[partner.stage]}`}>● {partner.stage}</td>
+                <td><ProgressBadge done={progress.done} total={progress.total} /></td>
+                <td>{partner.website}</td>
+                <td>{truncate(partner.appetite ?? '', 90)}</td>
+              </tr>
+            );
+          }) : <tr><td colSpan={6} className="empty">No partners match your search.</td></tr>}
         </tbody>
       </table>
     </div>
@@ -368,27 +422,23 @@ function PartnerModal({ partnerId, onClose, onSaved, showToast }: { partnerId?: 
   const [partner, setPartner] = useState<Partner | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [documents, setDocuments] = useState<DocumentWithUrl[]>([]);
-  const [activity, setActivity] = useState<Activity[]>([]);
   const [form, setForm] = useState<PartnerForm>(partnerToForm(null));
   const [contactsDraft, setContactsDraft] = useState<ContactDraft[]>([]);
   const [tagInput, setTagInput] = useState('');
-  const [activityType, setActivityType] = useState('Email');
-  const [activityNote, setActivityNote] = useState('');
+  const [newChecklistLabel, setNewChecklistLabel] = useState('');
   const [docCategory, setDocCategory] = useState('Application');
   const [uploading, setUploading] = useState(false);
 
   const loadDetails = async () => {
     if (!partnerId) return;
-    const [{ data: partnerData, error: partnerError }, { data: contactsData, error: contactsError }, { data: docsData, error: docsError }, { data: activityData, error: activityError }] = await Promise.all([
+    const [{ data: partnerData, error: partnerError }, { data: contactsData, error: contactsError }, { data: docsData, error: docsError }] = await Promise.all([
       supabase.from('partners').select('*').eq('id', partnerId).single(),
       supabase.from('contacts').select('*').eq('partner_id', partnerId).order('name', { ascending: true }),
       supabase.from('documents').select('*').eq('partner_id', partnerId).order('uploaded_at', { ascending: false }),
-      supabase.from('activity').select('*').eq('partner_id', partnerId).order('date', { ascending: false }),
     ]);
     throwIfError(partnerError);
     throwIfError(contactsError);
     throwIfError(docsError);
-    throwIfError(activityError);
     const mappedPartner = mapPartner(partnerData as PartnerRow);
     const mappedDocs = ((docsData ?? []) as Omit<DocumentWithUrl, 'url'>[]).map((doc) => ({
       ...doc,
@@ -399,7 +449,6 @@ function PartnerModal({ partnerId, onClose, onSaved, showToast }: { partnerId?: 
     setContacts((contactsData ?? []) as Contact[]);
     setContactsDraft(((contactsData ?? []) as Contact[]).map(contactToDraft));
     setDocuments(mappedDocs);
-    setActivity((activityData ?? []) as Activity[]);
   };
 
   useEffect(() => {
@@ -410,7 +459,7 @@ function PartnerModal({ partnerId, onClose, onSaved, showToast }: { partnerId?: 
     });
   }, [partnerId]);
 
-  const setField = (field: keyof PartnerForm, value: string | string[]) => setForm((prev) => ({ ...prev, [field]: value }));
+  const setField = (field: keyof PartnerForm, value: string | string[] | CloseChecklistItem[]) => setForm((prev) => ({ ...prev, [field]: value }));
   const isNew = !partnerId;
 
   const addTag = () => {
@@ -418,6 +467,32 @@ function PartnerModal({ partnerId, onClose, onSaved, showToast }: { partnerId?: 
     if (!tag || form.productsToWrite.includes(tag)) return;
     setForm((prev) => ({ ...prev, productsToWrite: [...prev.productsToWrite, tag] }));
     setTagInput('');
+  };
+
+  const persistChecklist = async (items: CloseChecklistItem[]) => {
+    const next = normalizeCloseChecklist(items);
+    setField('closeChecklist', next);
+    if (!partnerId) return;
+    const { error } = await supabase.from('partners').update({ close_checklist: next, updated_at: new Date().toISOString() }).eq('id', partnerId);
+    if (error) { console.error(error); showToast('Checklist save failed'); return; }
+    setPartner((prev) => prev ? { ...prev, closeChecklist: next, updatedAt: Date.now() } : prev);
+    void onSaved();
+  };
+
+  const addChecklistItem = async () => {
+    const label = newChecklistLabel.trim();
+    if (!label) return;
+    const maxOrder = form.closeChecklist.reduce((max, item) => Math.max(max, item.order), -1);
+    await persistChecklist([...form.closeChecklist, { id: createId(), label, checked: false, order: maxOrder + 1 }]);
+    setNewChecklistLabel('');
+  };
+
+  const updateChecklistItem = async (id: string, changes: Partial<CloseChecklistItem>) => {
+    await persistChecklist(form.closeChecklist.map((item) => item.id === id ? { ...item, ...changes } : item));
+  };
+
+  const deleteChecklistItem = async (id: string) => {
+    await persistChecklist(form.closeChecklist.filter((item) => item.id !== id).map((item, index) => ({ ...item, order: index })));
   };
 
   const saveContacts = async (pid: string) => {
@@ -481,14 +556,6 @@ function PartnerModal({ partnerId, onClose, onSaved, showToast }: { partnerId?: 
     }
   };
 
-  const handleAddActivity = async (event?: FormEvent) => {
-    event?.preventDefault();
-    if (!partnerId || !activityNote.trim()) return;
-    const { error } = await supabase.from('activity').insert({ partner_id: partnerId, type: activityType, note: activityNote.trim(), date: new Date().toISOString() });
-    if (error) { console.error(error); showToast('Activity failed'); return; }
-    setActivityNote('');
-    await loadDetails();
-  };
 
   const uploadFile = async (file: File) => {
     if (!partnerId) { showToast('Save partner before uploading files'); return; }
@@ -559,11 +626,16 @@ function PartnerModal({ partnerId, onClose, onSaved, showToast }: { partnerId?: 
           <div className="section-divider">Documents</div>
           {partnerId ? <Documents documents={documents} docCategory={docCategory} setDocCategory={setDocCategory} uploadFile={uploadFile} deleteDocument={removeDocument} uploading={uploading} /> : <div className="document-drop">Save this partner before uploading documents.</div>}
 
-          <div className="section-divider">Activity Log</div>
-          <div className="activity-log">
-            {activity.length ? activity.slice().sort((a, b) => dateValue(b.date) - dateValue(a.date)).map((item) => <ActivityRow key={item.id} item={item} onDelete={async () => { const { error } = await supabase.from('activity').delete().eq('id', item.id); if (error) { console.error(error); showToast('Activity delete failed'); return; } setActivity((prev) => prev.filter((entry) => entry.id !== item.id)); }} />) : <div className="activity-empty">No activity yet. Log your first touch below.</div>}
-          </div>
-          {partnerId && <form className="add-activity" onSubmit={handleAddActivity}><select value={activityType} onChange={(e) => setActivityType(e.target.value)}>{ACTIVITY_TYPES.map((type) => <option key={type}>{type}</option>)}</select><input value={activityNote} onChange={(e) => setActivityNote(e.target.value)} placeholder="What happened?" /><button className="btn primary">Log</button></form>}
+          <div className="section-divider section-divider-split"><span>Path to Close</span><ProgressBadge done={checklistStats(form.closeChecklist).done} total={checklistStats(form.closeChecklist).total} /></div>
+          <CloseChecklist
+            items={form.closeChecklist}
+            newLabel={newChecklistLabel}
+            setNewLabel={setNewChecklistLabel}
+            onAdd={addChecklistItem}
+            onRename={(id, label) => updateChecklistItem(id, { label })}
+            onToggle={(id, checked) => updateChecklistItem(id, { checked })}
+            onDelete={deleteChecklistItem}
+          />
         </div>
         <div className="modal-footer">
           <div>{partnerId && <button className="btn danger" onClick={handleDeletePartner}>Delete Partner</button>}</div>
@@ -592,6 +664,21 @@ function Documents({ documents, docCategory, setDocCategory, uploadFile, deleteD
   return <><div className="field-grid"><Field label="Category"><select value={docCategory} onChange={(e) => setDocCategory(e.target.value)}>{DOC_CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select></Field><Field label="Upload"><label className="btn primary" style={{ textAlign: 'center' }}>{uploading ? 'Uploading...' : 'Choose File'}<input type="file" disabled={uploading} onChange={(e) => onFiles(e.target.files)} /></label></Field></div><div className="document-drop" style={{ borderColor: dragging ? 'var(--orange)' : undefined }} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); onFiles(e.dataTransfer.files); }}>Drag a file here or use Choose File.</div><div className="document-list">{documents.map((doc) => <div className="document-item" key={doc.id}><a href={doc.url ?? '#'} target="_blank" rel="noreferrer">{doc.file_name}</a><span className="pill pill-program">{doc.category ?? 'Other'}</span><span className="activity-date">{formatShortDate(doc.created_at ?? doc.uploaded_at ?? Date.now())}</span><button className="btn danger" onClick={() => deleteDocument(doc)}>Delete</button></div>)}</div></>;
 }
 
-function ActivityRow({ item, onDelete }: { item: Activity; onDelete: () => void }) {
-  return <div className="activity-item"><div className="activity-date">{formatDate(item.date)}</div><div className="activity-body"><span className="activity-type">{item.type}</span>{item.note}</div><button className="activity-delete" onClick={onDelete}>×</button></div>;
+function CloseChecklist({ items, newLabel, setNewLabel, onAdd, onRename, onToggle, onDelete }: { items: CloseChecklistItem[]; newLabel: string; setNewLabel: (value: string) => void; onAdd: () => Promise<void>; onRename: (id: string, label: string) => Promise<void>; onToggle: (id: string, checked: boolean) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
+  const sortedItems = items.slice().sort((a, b) => Number(a.checked) - Number(b.checked) || a.order - b.order);
+  return (
+    <div className="close-checklist">
+      {sortedItems.length ? sortedItems.map((item) => (
+        <div className={`checklist-item ${item.checked ? 'done' : ''}`} key={item.id}>
+          <input type="checkbox" checked={item.checked} onChange={(event) => { void onToggle(item.id, event.target.checked); }} />
+          <input className="checklist-label" defaultValue={item.label} onBlur={(event) => { const label = event.target.value.trim(); if (label && label !== item.label) void onRename(item.id, label); }} />
+          <button className="activity-delete" onClick={() => { void onDelete(item.id); }}>×</button>
+        </div>
+      )) : <div className="activity-empty">No close steps yet. Add the next blocker below.</div>}
+      <div className="add-checklist-item">
+        <input className="inline-input" value={newLabel} onChange={(event) => setNewLabel(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void onAdd(); } }} placeholder="Add close step" />
+        <button className="btn" onClick={() => { void onAdd(); }}>Add</button>
+      </div>
+    </div>
+  );
 }

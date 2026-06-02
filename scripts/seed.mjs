@@ -9,6 +9,23 @@ const supabase = createClient(supabaseUrl, serviceKey, {
   realtime: { transport: WebSocket },
 });
 
+const defaultCloseChecklist = [
+  'Intro call held',
+  'NDA / confidentiality signed',
+  'Appetite guide received',
+  'Products / lines to write confirmed',
+  'Commission / economics agreed',
+  'Application + submission docs received',
+  'Sample risk submitted',
+  'Binding authority / LOA confirmed',
+  'Producer agreement executed',
+].map((label, index) => ({
+  id: `default-${index + 1}`,
+  label,
+  checked: false,
+  order: index,
+}));
+
 const seedPartners = [
   { name: 'Outdoor Underwriters (MMA)', type: 'MGA', stage: 'To Contact', productFit: 'Hunt lease liability, timberland, guides & outfitters. Strongest direct fit for Teddy hunting experiences.', website: 'outdoorund.com', notes: 'Top priority — direct overlap with hunt lease product. Owned by McGriff/Marsh.' },
   { name: 'Lockton Affinity Outdoor', type: 'Program Administrator', stage: 'To Contact', productFit: 'Affinity program administrator — could white-label or co-brand a Teddy landowner program.', website: 'locktonaffinityoutdoor.com', notes: 'Affinity model fits platform play. Ask about minimum policy count to launch a program.' },
@@ -48,6 +65,7 @@ const rows = seedPartners.map((partner) => ({
   rating_process: null,
   economics: null,
   notes: partner.notes,
+  close_checklist: defaultCloseChecklist,
   created_at: now,
   updated_at: now,
 }));

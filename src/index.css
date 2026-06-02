@@ -81,6 +81,8 @@ button, input, textarea, select { font: inherit; }
 .pill-mga { background: var(--orange-soft); color: var(--orange); }
 .pill-broker { background: var(--yellow-soft); color: var(--yellow); }
 .pill-program { background: rgba(168, 160, 148, 0.15); color: var(--text-dim); }
+.progress-badge { display: inline-flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--orange-soft); border: 1px solid var(--orange-border); color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 1; text-transform: uppercase; letter-spacing: 0.08em; padding: 7px 9px; margin-top: 10px; border-radius: 2px; width: 100%; max-width: 220px; }
+.progress-badge strong { color: var(--orange); font-weight: 600; white-space: nowrap; }
 .card-last-touch { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-faint); margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
 .table-wrap { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 2px; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
@@ -114,6 +116,9 @@ tr.row:last-child td { border-bottom: none; }
 .field input:focus, .field select:focus, .field textarea:focus, .inline-input:focus { outline: none; border-color: var(--orange-border); }
 .section-divider { font-family: 'JetBrains Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--orange); margin: 18px 0 14px; padding-bottom: 6px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
 .section-divider::before { content: ''; width: 4px; height: 4px; background: var(--orange); border-radius: 50%; }
+.section-divider-split { justify-content: space-between; flex-wrap: wrap; }
+.section-divider-split span { margin-right: auto; }
+.section-divider-split .progress-badge { width: auto; margin-top: 0; }
 .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .tag-chip { background: var(--orange-soft); color: var(--orange); border: 1px solid var(--orange-border); display: inline-flex; align-items: center; gap: 6px; }
 .tag-chip button { background: transparent; border: none; color: var(--orange); cursor: pointer; }
@@ -137,6 +142,15 @@ tr.row:last-child td { border-bottom: none; }
 .activity-delete:hover { color: var(--red); }
 .add-activity { display: grid; grid-template-columns: 130px 1fr auto; gap: 8px; margin-top: 12px; }
 .add-activity select, .add-activity input { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; font-family: 'Inter', sans-serif; font-size: 12px; border-radius: 2px; }
+.close-checklist { background: var(--bg); border: 1px solid var(--border); border-radius: 2px; padding: 14px; display: grid; gap: 8px; }
+.checklist-item { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.checklist-item:last-of-type { border-bottom: none; }
+.checklist-item input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--orange); cursor: pointer; }
+.checklist-label { background: transparent; border: 1px solid transparent; color: var(--text); padding: 6px 8px; border-radius: 2px; width: 100%; }
+.checklist-label:focus { outline: none; border-color: var(--orange-border); background: var(--bg-elevated); }
+.checklist-item.done { opacity: 0.48; }
+.checklist-item.done .checklist-label { text-decoration: line-through; color: var(--text-faint); }
+.add-checklist-item { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 8px; }
 .modal-footer { padding: 18px 28px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; gap: 10px; }
 .modal-footer-right { display: flex; gap: 10px; }
 .toast { position: fixed; bottom: 24px; right: 24px; background: var(--bg-card); border: 1px solid var(--orange); color: var(--text); padding: 12px 18px; border-radius: 2px; font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; z-index: 200; animation: slideUp 0.2s ease; }
