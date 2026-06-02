@@ -326,7 +326,7 @@ export default function App() {
       </div>
 
       <div className="storage-notice">
-        <div className="storage-notice-text"><strong style={{ color: 'var(--orange)' }}>SAVED TO SUPABASE</strong> · Partner profiles, contacts, activity, and documents persist in the shared BirdDog database.</div>
+        <div className="storage-notice-text"><strong style={{ color: 'var(--orange)' }}>SAVED TO SUPABASE</strong> · Partner profiles, contacts, documents, and Path to Close checklists persist in the shared BirdDog database.</div>
       </div>
 
       <div className="stats">
